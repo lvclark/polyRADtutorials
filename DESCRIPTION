@@ -9,7 +9,9 @@ Authors@R: c(person("Lindsay V.", "Clark", email = "lvclark@illinois.edu",
 Author: Lindsay V. Clark [aut, cre] (<https://orcid.org/0000-0002-3881-9252>),
   U.S. National Science Foundation [fnd]
 Maintainer: Lindsay V. Clark <lvclark@illinois.edu>
-Suggests: polyRAD, adegenet
+Depends: R (>= 3.5.0)
+Suggests: polyRAD, adegenet, knitr, rmarkdown
+VignetteBuilder: knitr, rmarkdown
 Description: Additional tutorials for polyRAD that are not included in its
   package vignettes due to file size, computational time, and/or package
   dependencies.
