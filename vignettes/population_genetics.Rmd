@@ -35,6 +35,7 @@ library(adegenet)
 library(polyRADtutorials)
 library(ggplot2)
 library(maps)
+library(pegas)
 ```
 
 Here we'll load the read depth data and collection location information.
@@ -215,6 +216,7 @@ Based on these curves, I chose six and four clusters for the population
 structure and naive datasets, respectively.
 
 ```{r findclust2, echo = FALSE}
+set.seed(529)
 clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct), n.clust = 6)
 clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive), n.clust = 4)
 ```
@@ -246,8 +248,9 @@ ggplot(Msa_latlong, aes(x = DAPC_Naive, y = HindHe, fill = DAPC_Naive)) +
   geom_boxplot()
 ```
 
-So with the population structure-aware genotypes, groups 2 and 4 are hybrids.
-With the naive genotypes, group 1 is hybrids.
+So with the population structure-aware genotypes, groups 4 and 6 are hybrids.
+With the naive genotypes, group 1 is hybrids.  (The groups may be in a different
+order for you.)
 
 We can map these groups to see if they make sense geographically.
 
@@ -269,3 +272,27 @@ ggplot() +
 
 The extra clusters that we got from using the population structure-aware
 genotypes don't seem to add meaningful information.
+
+## Analysis of molecular variance (AMOVA)
+
+In AMOVA, genetic distances between individuals or populations are
+partitioned so that we can determine the amount of variance explained by
+heirarchical groupings.  There are a few implementations in R, and we will
+use the one from the pegas package here.
+
+First we will get a matrix of Euclidean distances between accessions.
+
+```{r dist}
+distNaive <- dist(matrixNaive, method = "euclidean")
+```
+
+Now we will regress that distance on the DAPC clusters.
+
+```{r amova}
+amovaNaive <- pegas::amova(distNaive ~ DAPC_Naive, data = Msa_latlong)
+amovaNaive
+```
+
+We can see that these four DAPC clusters explain 11.5% of the molecular variance.
+Significance is less than 0.001; we would have to do more permutations (`nperm`)
+to determine it exactly.
