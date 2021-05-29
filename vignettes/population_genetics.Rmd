@@ -1,0 +1,232 @@
+---
+title: "Using polyRAD for population genetics"
+author: Lindsay Clark, HPCBio, Roy J. Carver Biotechnology Center, University of Illinois,
+  Urbana-Champaign
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+vignette: >
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteIndexEntry{Using polyRAD for population genetics}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This tutorial uses the same dataset as a tutorial that I gave at a workshop in
+January 2021, which can be watched on
+[YouTube](https://www.youtube.com/watch?v=vjwFBspNpRc). It consists of RAD-seq
+data on a diversity panel consisting mostly of wild-collected
+_Miscanthus sacchariflorus_ (Clark et al. 2018, https://doi.org/10.1093/aob/mcy161,
+https://doi.org/10.13012/B2IDB-0170190_V3, https://doi.org/10.13012/B2IDB-8170405_V1).
+
+In addition to loading polyRAD, we'll load some other packages for population genetics
+and making plots.  The polyRADtutorials package is not on CRAN but can be installed from
+GitHub or R-universe, and contains the dataset.
+
+```{r libs, message = FALSE}
+library(polyRAD)
+library(adegenet)
+library(polyRADtutorials)
+library(ggplot2)
+library(maps)
+```
+
+Here we'll load the read depth data and collection location information.
+
+```{r data}
+data("Msa_4x_chr3")
+mydata <- Msa_4x_chr3
+rm(Msa_4x_chr3)
+mydata
+
+data("Msa_latlong")
+head(Msa_latlong)
+```
+
+## Filtering
+
+### Samples
+
+In my video tutorial with this data, I filtered some samples that appeared
+highly heterozygous.
+
+```{r hh_sample}
+hh <- HindHe(mydata)
+
+TotDepthT <- rowSums(mydata$locDepth)
+
+hhByInd <- rowMeans(hh, na.rm = TRUE)
+
+plot(TotDepthT, hhByInd, log = "x",
+     xlab = "Depth", ylab = "Hind/He", main = "Samples")
+```
+
+However, since this is a population genetics study and not a GWAS study,
+maybe I'm looking for inter-species hybrids.  Let's keep them in that case.
+(Of course, identification would be easier if I had some individuals of other
+species as well.)  Which ones are they?
+
+```{r highhh}
+hhByInd[hhByInd > 0.8]
+```
+
+Let's add all of the values to our sample table.
+
+```{r tablehh}
+Msa_latlong$HindHe <- hhByInd
+```
+
+### Markers
+
+In my video tutorial I also filtered markers that appeared to be collapsed
+paralogs.  Let's still do that.
+
+```{r hh_locus}
+hh2 <- HindHe(mydata)
+
+hhByLoc <- colMeans(hh, na.rm = TRUE)
+
+hist(hhByLoc, breaks = 30)
+
+InbreedingFromHindHe(0.65, 4)
+
+set.seed(528)
+ExpectedHindHe(mydata, inbreeding = 0.133)
+
+thresh1 <- 0.523
+thresh2 <- 0.715
+
+keeploci <- names(hhByLoc)[hhByLoc > thresh1 & hhByLoc < thresh2]
+
+mydata <- SubsetByLocus(mydata, keeploci)
+mydata
+```
+
+## Genotype calling
+
+Since this is a collection of wild plants, `IteratePopStruct` will be the most
+accurate way to call genotypes.
+
+```{r iteratepopstruct}
+mydataPopStruct <- IteratePopStruct(mydata, overdispersion = 10)
+```
+
+However... I plan to use my genotypes to estimate population structure, when I
+just used population structure to estimate my genotypes.  It's kind of circular.
+Will a reviewer have a problem with it?  Maybe.  Think about it, anyway.  If you
+would rather use a naive method to call genotypes, do this:
+
+```{r naive}
+mydataNaive <- AddGenotypePriorProb_Even(mydata)
+mydataNaive <- AddGenotypeLikelihood(mydataNaive, overdispersion = 10)
+mydataNaive <- AddGenotypePosteriorProb(mydataNaive)
+mydataNaive <- AddPloidyChiSq(mydataNaive)
+```
+
+## Analyses with adegenet
+
+The R package adegenet has some nice analyses popular in population genetics.
+Better still, many of them now work on simple data matrices, without
+the need so use any of adegenet's built-in data classes.  So we'll generate
+matrices of marker data from polyRAD and then go from there.
+
+```{r getwmg}
+matrixPopStruct <- GetWeightedMeanGenotypes(mydataPopStruct)
+matrixNaive <- GetWeightedMeanGenotypes(mydataNaive)
+```
+
+### Discriminant analysis of principal components (DAPC)
+
+First we'll run `find.clust` to identify likely cluster membership for each
+sample.
+
+```{r findclust1a, eval = FALSE}
+clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct))
+```
+
+![BIC using pop struct dataset](images/BIC_popstruct.png)
+
+```{r findclust1b, eval = FALSE}
+clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive))
+```
+
+![BIC using naive dataset](images/BIC_naive.png)
+
+Based on these curves, I chose six and four clusters for the population
+structure and naive datasets, respectively.
+
+```{r findclust2, echo = FALSE}
+clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct), n.clust = 6)
+clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive), n.clust = 4)
+```
+
+Now we will use these preliminary clusters to run DAPC.  You may choose to
+omid the `n.pca` and `n.da` arguments in order to choose these values interactively.
+
+```{r dapc}
+dapc_PopStruct <- dapc(matrixPopStruct, clust1$grp,
+                       n.pca = 200, n.da = 5)
+dapc_Naive <- dapc(matrixNaive, clust2$grp,
+                       n.pca = 200, n.da = 3)
+```
+
+We'll add the assignments to our sample table.
+
+```{r dapctable}
+Msa_latlong$DAPC_PopStruct <- dapc_PopStruct$assign
+Msa_latlong$DAPC_Naive <- dapc_Naive$assign
+```
+
+We can visualize $H_{ind}/H_E$ by DAPC group in order to identify groups that
+are likely to represent interspecies hybrids.
+
+```{r dapcbarplots}
+ggplot(Msa_latlong, aes(x = DAPC_PopStruct, y = HindHe, fill = DAPC_PopStruct)) +
+  geom_boxplot()
+ggplot(Msa_latlong, aes(x = DAPC_Naive, y = HindHe, fill = DAPC_Naive)) +
+  geom_boxplot()
+```
+
+So with the population structure-aware genotypes, groups 2 and 4 are hybrids.
+With the naive genotypes, group 1 is hybrids.
+
+We can map these groups to see if they make sense geographically.
+
+```{r dapcmap}
+east_asia <- map_data("world")
+east_asia <- east_asia[east_asia$long > 110 & east_asia$long < 146 &
+                         east_asia$lat > 28 & east_asia$lat < 50,]
+
+# prevent some ugly lines in the map
+east_asia$group2 <- integer(nrow(east_asia))
+j <- 1L
+for(i in seq_len(nrow(east_asia))){
+  if(i != 1L && east_asia$order[i] - east_asia$order[i - 1L] != 1L){
+     j <- j + 1L
+  }
+  east_asia$group2[i] <- j
+}
+
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, color = DAPC_PopStruct))
+
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, color = DAPC_Naive))
+```
+
+The extra clusters that we got from using the population structure-aware
+genotypes don't seem to add meaningful information.
