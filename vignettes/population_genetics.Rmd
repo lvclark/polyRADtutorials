@@ -47,7 +47,30 @@ mydata
 
 data("Msa_latlong")
 head(Msa_latlong)
+Msa_latlong$Accession <- as.character(Msa_latlong$Accession)
 ```
+
+We'll also load some geographical data, namely the borders of East Asian
+countries where these samples were collected.  This will be used for plotting
+later.
+
+```{r borders}
+east_asia <- map_data("world")
+summary(Msa_latlong)
+east_asia <- east_asia[east_asia$long > 115 & east_asia$long < 146 &
+                         east_asia$lat > 28 & east_asia$lat < 50,]
+
+# prevent some ugly lines in the map
+east_asia$group2 <- integer(nrow(east_asia))
+j <- 1L
+for(i in seq_len(nrow(east_asia))){
+  if(i != 1L && east_asia$order[i] - east_asia$order[i - 1L] != 1L){
+     j <- j + 1L
+  }
+  east_asia$group2[i] <- j
+}
+```
+
 
 ## Filtering
 
@@ -129,6 +152,36 @@ mydataNaive <- AddGenotypePosteriorProb(mydataNaive)
 mydataNaive <- AddPloidyChiSq(mydataNaive)
 ```
 
+We can take a look at the PCs that were used for genotype calling by the
+population structure method.  This will give us an idea of patterns of
+population structure that could be exaggerated using that calling method.
+The first two axes are shown below, but I recommend exploring all seven
+(or however many are generated with your dataset).
+
+```{r checkpca}
+identical(rownames(mydataPopStruct$PCA), Msa_latlong$Accession)
+Msa_latlong <- cbind(Msa_latlong, mydataPopStruct$PCA)
+
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, color = PC1)) +
+  scale_color_viridis_c() +
+  ggtitle("PC1")
+
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, color = PC2)) +
+  scale_color_viridis_c() +
+  ggtitle("PC2")
+```
+
+
 ## Analyses with adegenet
 
 The R package adegenet has some nice analyses popular in population genetics.
@@ -199,20 +252,6 @@ With the naive genotypes, group 1 is hybrids.
 We can map these groups to see if they make sense geographically.
 
 ```{r dapcmap}
-east_asia <- map_data("world")
-east_asia <- east_asia[east_asia$long > 110 & east_asia$long < 146 &
-                         east_asia$lat > 28 & east_asia$lat < 50,]
-
-# prevent some ugly lines in the map
-east_asia$group2 <- integer(nrow(east_asia))
-j <- 1L
-for(i in seq_len(nrow(east_asia))){
-  if(i != 1L && east_asia$order[i] - east_asia$order[i - 1L] != 1L){
-     j <- j + 1L
-  }
-  east_asia$group2[i] <- j
-}
-
 ggplot() +
   geom_path(data = east_asia,
             mapping = aes(x = long, y = lat, group = group2),
