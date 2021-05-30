@@ -25,11 +25,13 @@ data on a diversity panel consisting mostly of wild-collected
 _Miscanthus sacchariflorus_ (Clark et al. 2018, https://doi.org/10.1093/aob/mcy161,
 https://doi.org/10.13012/B2IDB-0170190_V3, https://doi.org/10.13012/B2IDB-8170405_V1).
 
+The R package containing this tutorial is archived on Zenodo at *add doi*
+
 In addition to loading polyRAD, we'll load some other packages for population genetics
 and making plots.  The polyRADtutorials package is not on CRAN but can be installed from
 GitHub or R-universe, and contains the dataset.
 
-```{r libs, message = FALSE}
+```{r libs, message = FALSE, warning = FALSE}
 library(polyRAD)
 library(adegenet)
 library(polyRADtutorials)
@@ -38,6 +40,7 @@ library(maps)
 library(pegas)
 library(PBSmapping)
 library(spdep)
+library(polysat)
 ```
 
 Here we'll load the read depth data and collection location information.
@@ -189,7 +192,7 @@ ggplot() +
 
 The R package adegenet has some nice analyses popular in population genetics.
 Better still, many of them now work on simple data matrices, without
-the need so use any of adegenet's built-in data classes.  So we'll generate
+the need to use any of adegenet's built-in data classes.  So we'll generate
 matrices of marker data from polyRAD and then go from there.
 
 ```{r getwmg}
@@ -224,7 +227,7 @@ clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive), n.clust = 4)
 ```
 
 Now we will use these preliminary clusters to run DAPC.  You may choose to
-omid the `n.pca` and `n.da` arguments in order to choose these values interactively.
+omit the `n.pca` and `n.da` arguments in order to choose these values interactively.
 
 ```{r dapc}
 dapc_PopStruct <- dapc(matrixPopStruct, clust1$grp,
@@ -452,6 +455,9 @@ ggplot() +
 
 ### Mantel test
 
+For the rest of the tutorial, I will use only one genotype calling method for the
+sake of brevity.
+
 For a Mantel test, we need to compare genetic and geographic distances.  First
 we will get Euclidian genetic distances for non-hybrid individuals with
 collection location information.
@@ -474,7 +480,7 @@ mantel_Naive <- mantel.randtest(distNaive_subset, dist_geo)
 mantel_Naive
 ```
 
-This relationship can also be visualized.  The positive relationship can
+This relationship can also be visualized.  A positive relationship can
 be observed.  It also looks like there are some pairs with particularly low
 genetic distance in close geographic proximity, which may represent siblings,
 parent-offspring, or clones.
@@ -483,6 +489,15 @@ parent-offspring, or clones.
 ggplot(mapping = aes(x = dist_geo, y = distNaive_subset)) +
   geom_point() + geom_density_2d() + 
   labs(x = "Geographic distance", y = "Genetic distance")
+```
+
+### Export of genotypes to adegenet
+
+Are there other functions from adegenet that you want to use?  You can export
+discrete genotypes directly from polyRAD to a genind object.
+
+```{r exportgenind, eval = FALSE}
+mygenind <- Export_adegenet_genind(mydataNaive)
 ```
 
 ## Analysis of molecular variance (AMOVA) using pegas
@@ -508,3 +523,101 @@ amovaNaive
 We can see that these four DAPC clusters explain 11.5% of the molecular variance.
 Significance is less than 0.001; we would have to do more permutations (`nperm`)
 to determine it exactly.
+
+## Differentiation statistics using polysat
+
+To calculate population differentiation statistics, we need to know allele frequencies
+in each group.  We can calculate these as column means of the posterior mean genotypes.
+
+```{r popfreq}
+matrixNaiveAll <- GetWeightedMeanGenotypes(mydataNaive, omit1allelePerLocus = FALSE)
+freq_by_pop <- do.call(rbind, by(matrixNaiveAll, Msa_latlong$DAPC_Naive, colMeans))
+freq_by_pop[,1:5]
+```
+
+We need to make sure that allele frequencies sum to one within loci, which is not
+guaranteed by polyRAD when there are more than two alleles.  We also need to rename
+alleles to a format supported by polyRAD.
+
+```{r freqnorm}
+for(i in seq_len(nLoci(mydataNaive))){
+  thesealleles <- which(mydataNaive$alleles2loc == i)
+  # normalize to sum to one
+  temp <- freq_by_pop[,thesealleles]
+  temp <- sweep(temp, 1, rowSums(temp), "/")
+  freq_by_pop[,thesealleles] <- temp
+  # change allele names
+  thisloc <- GetLoci(mydataNaive)[i]
+  thisloc <- gsub("\\.", "_", thisloc) # remove periods from locus names
+  colnames(freq_by_pop)[thesealleles] <- paste(thisloc, seq_along(thesealleles), sep = ".")
+}
+```
+
+For the polysat `calcPopDiff` function, we also need a column called "Genomes"
+indicating the size of the population multiplied by the ploidy.
+
+```{r freqgenomes}
+ploidy <- 4L
+genomes <- as.vector(table(Msa_latlong$DAPC_Naive)) * ploidy
+freq_df <- data.frame(Genomes = genomes,
+                      freq_by_pop)
+```
+
+Now we can get differentiation statistics.
+
+```{r diffstats}
+my_JostD <- calcPopDiff(freq_df, metric = "Jost's D")
+my_JostD
+my_Gst <- calcPopDiff(freq_df, metric = "Gst")
+my_Gst
+```
+
+We can also use our matrix of allele frequencies to calculate expected
+heterozygosity (i.e. the probability that if two alleles are drawn at random
+from the population, they will be different), a common measure of diversity.
+Here I'm just doing the calculation manually rather than using polysat.
+
+```{r diversity}
+div_mat <- matrix(nrow = nrow(freq_by_pop), ncol = nLoci(mydataNaive),
+                  dimnames = list(rownames(freq_by_pop), GetLoci(mydataNaive)))
+for(i in seq_len(nLoci(mydataNaive))){
+  thesealleles <- which(mydataNaive$alleles2loc == i)
+
+  temp <- freq_by_pop[,thesealleles]
+  div_mat[,i] <- 1 - rowSums(temp ^ 2)
+}
+rowMeans(div_mat)
+```
+
+## Export to Structure
+
+[Structure](https://web.stanford.edu/group/pritchardlab/structure_software/release_versions/v2.3.4/html/structure.html)
+is more than two decades old and has stood the test of time.  You can use
+the `Export_Structure` function to take discrete gentoype calls from polyRAD
+and export them to Structure.  A Structure run on a typical GBS dataset can
+take several days, so I recommend using a computing cluster or cloud service
+to run many jobs in parallel from the command line.  In my experience, this
+approach is worthwhile because Structure is much more sensitive than similar
+but faster methods.  (Instructions on running Structure from the command line
+are beyond the scope of this tutorial.)
+
+```{r structure, eval = FALSE}
+Export_Structure(mydataNaive, "Msa_4x_structure.txt")
+```
+
+```
+Number of individuals: 270
+Number of loci: 1929
+Ploidy of data: 4
+Missing data value: -9
+
+File contains:
+Row of marker names
+Individual ID for each individual
+```
+
+## Did I miss anything?
+
+If you have any questions or problems with this tutorial, you can
+[start a discussion](https://github.com/lvclark/polyRADtutorials/discussions)
+or [file an issue](https://github.com/lvclark/polyRADtutorials/issues).
