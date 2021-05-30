@@ -450,6 +450,41 @@ ggplot() +
   ggtitle("sPCA axis 5, Naive genotype calls")
 ```
 
+### Mantel test
+
+For a Mantel test, we need to compare genetic and geographic distances.  First
+we will get Euclidian genetic distances for non-hybrid individuals with
+collection location information.
+
+```{r distsub}
+distNaive_subset <- dist(matrixNaive[utmXY$Accession,], method = "euclidean")
+```
+
+We can use the UTM coordinates directly to get distance in kilometers.
+
+```{r utmdist}
+dist_geo <- dist(utmXY[,c("X", "Y")], method = "euclidean")
+```
+
+Now we can test that these are correlated with each other.
+Unsurprisingly at this point, the relationship is significant.
+
+```{r mantel}
+mantel_Naive <- mantel.randtest(distNaive_subset, dist_geo)
+mantel_Naive
+```
+
+This relationship can also be visualized.  The positive relationship can
+be observed.  It also looks like there are some pairs with particularly low
+genetic distance in close geographic proximity, which may represent siblings,
+parent-offspring, or clones.
+
+```{r plotmantel}
+ggplot(mapping = aes(x = dist_geo, y = distNaive_subset)) +
+  geom_point() + geom_density_2d() + 
+  labs(x = "Geographic distance", y = "Genetic distance")
+```
+
 ## Analysis of molecular variance (AMOVA) using pegas
 
 In AMOVA, genetic distances between individuals or populations are
