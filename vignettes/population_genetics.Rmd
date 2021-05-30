@@ -25,7 +25,8 @@ data on a diversity panel consisting mostly of wild-collected
 _Miscanthus sacchariflorus_ (Clark et al. 2018, https://doi.org/10.1093/aob/mcy161,
 https://doi.org/10.13012/B2IDB-0170190_V3, https://doi.org/10.13012/B2IDB-8170405_V1).
 
-The R package containing this tutorial is archived on Zenodo at *add doi*
+The R package containing this tutorial is archived on Zenodo at
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4876568.svg)](https://doi.org/10.5281/zenodo.4876568)
 
 In addition to loading polyRAD, we'll load some other packages for population genetics
 and making plots.  The polyRADtutorials package is not on CRAN but can be installed from
