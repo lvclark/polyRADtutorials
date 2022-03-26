@@ -157,7 +157,7 @@ alfreq2x <- colMeans(mydata$depthRatio[mydata$taxaPloidy == 2,], na.rm = TRUE)
 theseloci2x <- GetLoci(mydata)[mydata$alleles2loc[alfreq2x >= 0.05 & alfreq2x < 0.5]]
 theseloci2x <- unique(theseloci2x)
 
-hh2x_05 <- colMeans(hh[mydata$taxaPloidy == 2, theseloci2x])
+hh2x_05 <- colMeans(hh[mydata$taxaPloidy == 2, theseloci2x], na.rm = TRUE)
 
 hist(hh2x_05, breaks = 20, xlab = "Hind/He", main = "Hind/He in diploids, MAF >= 0.05")
 
@@ -165,16 +165,15 @@ alfreq4x <- colMeans(mydata$depthRatio[mydata$taxaPloidy == 4,], na.rm = TRUE)
 theseloci4x <- GetLoci(mydata)[mydata$alleles2loc[alfreq4x >= 0.05 & alfreq4x < 0.5]]
 theseloci4x <- unique(theseloci4x)
 
-hh4x_05 <- colMeans(hh[mydata$taxaPloidy == 4, theseloci4x])
+hh4x_05 <- colMeans(hh[mydata$taxaPloidy == 4, theseloci4x], na.rm = TRUE)
 
 hist(hh4x_05, breaks = 20, xlab = "Hind/He", main = "Hind/He in tetraploids, MAF >= 0.05")
 ```
 
-We are expecting 0.5 in diploids and 0.75 in tetraploids, so the modes of 0.4 for diploids
-and 0.7 for tetraploids probably represent Mendelian markers. Using the chart from the
-main tutorial, with overdispersion of 11 this means inbreeding of 0.15 for diploids and
-0.0 for tetraploids. There are more diploids than tetraploids in the dataset, so we will
-split the difference and estimate overall inbreeding to be about 0.1.
+We are expecting 0.5 in diploids and 0.75 in tetraploids, so the modes of 0.35 for diploids
+and 0.45 for tetraploids probably represent Mendelian markers. Using the chart from the
+main tutorial, with overdispersion of 11 this means inbreeding of about 0.3 for both
+diploids and tetraploids.
 
 Now we can use our estimated overdispersion and inbreeding to determine the expected
 distribution of $H_{ind}/H_E$ in our dataset, given sample size and read depth, if it
@@ -185,13 +184,11 @@ that distribution to filter the dataset.
 hhByLoc <- colMeans(hh, na.rm = TRUE)
 hist(hhByLoc)
 
-### Change this and filter separately for diploids and tetraploids to see if less stringent
-
 set.seed(528)
-ExpectedHindHe(mydata, inbreeding = 0.1, overdispersion = od$optimal)
+ExpectedHindHe(mydata, inbreeding = 0.3, overdispersion = od$optimal)
 
-thresh1 <- 0.436
-thresh2 <- 0.607
+thresh1 <- 0.314
+thresh2 <- 0.507
 
 keeploci <- names(hhByLoc)[hhByLoc > thresh1 & hhByLoc < thresh2]
 
