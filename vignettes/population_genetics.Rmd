@@ -18,12 +18,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Introduction
 
-This tutorial uses the same dataset as a tutorial that I gave at a workshop in
-January 2021, which can be watched on
-[YouTube](https://www.youtube.com/watch?v=vjwFBspNpRc). It consists of RAD-seq
-data on a diversity panel consisting mostly of wild-collected
+This tutorial uses RAD-seq data from a diversity panel consisting mostly of wild-collected
 _Miscanthus sacchariflorus_ (Clark et al. 2018, https://doi.org/10.1093/aob/mcy161,
 https://doi.org/10.13012/B2IDB-0170190_V3, https://doi.org/10.13012/B2IDB-8170405_V1).
+Most individuals are diploid or tetraploid, with a few triploids.
 
 The R package containing this tutorial is archived on Zenodo at
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4876568.svg)](https://doi.org/10.5281/zenodo.4876568)
@@ -42,19 +40,18 @@ library(pegas)
 library(PBSmapping)
 library(spdep)
 library(polysat)
+library(tidyr)
 ```
 
-Here we'll load the read depth data and collection location information.
+First we will load a spreadsheet of collection location information and ploidy
+as determined by flow cytometry.  Here I use the `system.file()` function to
+locate the example file on my computer, but for your own dataset you can input
+the file path directly.
 
 ```{r data}
-data("Msa_4x_chr3")
-mydata <- Msa_4x_chr3
-rm(Msa_4x_chr3)
-mydata
-
-data("Msa_latlong")
+Msa_latlong <- read.csv(system.file("extdata", "Msa_ploidy.csv",
+                                    package = "polyRADtutorials"))
 head(Msa_latlong)
-Msa_latlong$Accession <- as.character(Msa_latlong$Accession)
 ```
 
 We'll also load some geographical data, namely the borders of East Asian
@@ -64,7 +61,7 @@ later.
 ```{r borders}
 east_asia <- map_data("world")
 summary(Msa_latlong)
-east_asia <- east_asia[east_asia$long > 115 & east_asia$long < 146 &
+east_asia <- east_asia[east_asia$long > 104 & east_asia$long < 146 &
                          east_asia$lat > 28 & east_asia$lat < 50,]
 
 # prevent some ugly lines in the map
@@ -78,59 +75,121 @@ for(i in seq_len(nrow(east_asia))){
 }
 ```
 
+Now we will import allelic read depth from VCF. Note that if you want to be
+able to export to VCF later, you will need your reference genome file to
+pass to the `refgenome` argument (I am not doing that here because I probably
+should not be distributing a reference genome sequence on GitHub).
+I am also setting `expectedAlleles` and `expectedLoci` to low values because I
+know there are only 5000 SNPs in this example dataset. Many of these SNPs
+originated from the same RAD tags, so you'll see that they get reduced to
+1395 markers, many of which are multiallelic.
+
+```{r vcf}
+# Find the VCF file to import
+infile <- system.file("extdata", "Msa_Chr03_5k.vcf.bgz",
+                      package = "polyRADtutorials")
+
+# Make a vector of taxa ploidies from our metadata spreadsheet
+tp <- Msa_latlong$Ploidy
+names(tp) <- Msa_latlong$Accession
+
+# Read the VCF
+mydata <- VCF2RADdata(infile, possiblePloidies = list(2), taxaPloidy = tp,
+                      expectedAlleles = 15000, expectedLoci = 5000)
+mydata
+```
 
 ## Filtering
 
 ### Samples
 
-In my video tutorial with this data, I filtered some samples that appeared
-highly heterozygous.
+Let's examine the distribution of read depth and the $H_{ind}/H_E$ statistic
+across samples, by ploidy.
 
 ```{r hh_sample}
 hh <- HindHe(mydata)
 
-TotDepthT <- rowSums(mydata$locDepth)
+Msa_latlong$HindHe <- rowMeans(hh, na.rm = TRUE)[Msa_latlong$Accession]
+Msa_latlong$Depth <- rowSums(mydata$locDepth)[Msa_latlong$Accession]
 
-hhByInd <- rowMeans(hh, na.rm = TRUE)
-
-plot(TotDepthT, hhByInd, log = "x",
-     xlab = "Depth", ylab = "Hind/He", main = "Samples")
+ggplot(Msa_latlong, aes(x = Depth, y = HindHe)) +
+  geom_point() +
+  facet_wrap(~ Ploidy) +
+  ggtitle("Read depth and Hind/He across individuals") +
+  scale_x_log10()
 ```
 
-However, since this is a population genetics study and not a GWAS study,
-maybe I'm looking for inter-species hybrids.  Let's keep them in that case.
-(Of course, identification would be easier if I had some individuals of other
-species as well.)  Which ones are they?
+Within ploidy, there aren't any major outliers for $H_{ind}/H_E$, so we probably
+don't need to filter samples. We can visualize $H_{ind}/H_E$, scaled by its
+expected value, on a map to see if particular regions are more inbred. In this
+case there's nothing particularly striking although some regions of Russia and
+central Japan may be more inbred than other regions.
 
-```{r highhh}
-hhByInd[hhByInd > 0.8]
+```{r inbrmap, fig.width = 9, fig.height = 7}
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, fill = HindHe * Ploidy / (Ploidy - 1),
+                           shape = as.character(Ploidy)),
+             size = 3) +
+  scale_fill_viridis_c() +
+  labs(shape = "Ploidy") +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
+  ggtitle("Hind/He by individual")
 ```
 
-Let's add all of the values to our sample table.
-
-```{r tablehh}
-Msa_latlong$HindHe <- hhByInd
-```
 
 ### Markers
 
-In my video tutorial I also filtered markers that appeared to be collapsed
-paralogs.  Let's still do that.
+To filter markers by $H_{ind}/H_E$, we must first estimate overdispersion.
+
+```{r overdispersion}
+od <- TestOverdispersion(mydata, to_test = 8:14)
+```
+
+Next, we must estimate inbreeding. We will do this within ploidy using the
+graph provided in the polyRAD tutorial, using only markers with a minor allele
+frequency of at least 0.05.
+
+```{r estinbr}
+alfreq2x <- colMeans(mydata$depthRatio[mydata$taxaPloidy == 2,], na.rm = TRUE)
+theseloci2x <- GetLoci(mydata)[mydata$alleles2loc[alfreq2x >= 0.05 & alfreq2x < 0.5]]
+theseloci2x <- unique(theseloci2x)
+
+hh2x_05 <- colMeans(hh[mydata$taxaPloidy == 2, theseloci2x], na.rm = TRUE)
+
+hist(hh2x_05, breaks = 20, xlab = "Hind/He", main = "Hind/He in diploids, MAF >= 0.05")
+
+alfreq4x <- colMeans(mydata$depthRatio[mydata$taxaPloidy == 4,], na.rm = TRUE)
+theseloci4x <- GetLoci(mydata)[mydata$alleles2loc[alfreq4x >= 0.05 & alfreq4x < 0.5]]
+theseloci4x <- unique(theseloci4x)
+
+hh4x_05 <- colMeans(hh[mydata$taxaPloidy == 4, theseloci4x], na.rm = TRUE)
+
+hist(hh4x_05, breaks = 20, xlab = "Hind/He", main = "Hind/He in tetraploids, MAF >= 0.05")
+```
+
+We are expecting 0.5 in diploids and 0.75 in tetraploids, so the modes of 0.35 for diploids
+and 0.45 for tetraploids probably represent Mendelian markers. Using the chart from the
+main tutorial, with overdispersion of 11 this means inbreeding of about 0.3 for both
+diploids and tetraploids.
+
+Now we can use our estimated overdispersion and inbreeding to determine the expected
+distribution of $H_{ind}/H_E$ in our dataset, given sample size and read depth, if it
+consisted entirely of Mendelian markers.  We will use a 95% confidence interval on
+that distribution to filter the dataset.
 
 ```{r hh_locus}
-hh2 <- HindHe(mydata)
-
 hhByLoc <- colMeans(hh, na.rm = TRUE)
-
-hist(hhByLoc, breaks = 30)
-
-InbreedingFromHindHe(0.65, 4)
+hist(hhByLoc)
 
 set.seed(528)
-ExpectedHindHe(mydata, inbreeding = 0.133)
+ExpectedHindHe(mydata, inbreeding = 0.3, overdispersion = od$optimal)
 
-thresh1 <- 0.523
-thresh2 <- 0.715
+thresh1 <- 0.314
+thresh2 <- 0.507
 
 keeploci <- names(hhByLoc)[hhByLoc > thresh1 & hhByLoc < thresh2]
 
@@ -144,7 +203,8 @@ Since this is a collection of wild plants, `IteratePopStruct` will be the most
 accurate way to call genotypes.
 
 ```{r iteratepopstruct}
-mydataPopStruct <- IteratePopStruct(mydata, overdispersion = 10)
+set.seed(326)
+mydataPopStruct <- IteratePopStruct(mydata, overdispersion = od$optimal)
 ```
 
 However... I plan to use my genotypes to estimate population structure, when I
@@ -154,18 +214,26 @@ would rather use a naive method to call genotypes, do this:
 
 ```{r naive}
 mydataNaive <- AddGenotypePriorProb_Even(mydata)
-mydataNaive <- AddGenotypeLikelihood(mydataNaive, overdispersion = 10)
+mydataNaive <- AddGenotypeLikelihood(mydataNaive, overdispersion = od$optimal)
 mydataNaive <- AddGenotypePosteriorProb(mydataNaive)
 mydataNaive <- AddPloidyChiSq(mydataNaive)
+```
+
+Alternatively, we can fine-tune the number of PCs so that genotypes
+are corrected somewhat by population structure, but hopefully not overcorrected.
+
+```{r intermidiate}
+mydataIntermediate <- IteratePopStruct(mydata, overdispersion = od$optimal,
+                                       maxR2changeratio = 0.5)
 ```
 
 We can take a look at the PCs that were used for genotype calling by the
 population structure method.  This will give us an idea of patterns of
 population structure that could be exaggerated using that calling method.
-The first two axes are shown below, but I recommend exploring all seven
+The first two axes are shown below, but I recommend exploring all nine
 (or however many are generated with your dataset).
 
-```{r checkpca}
+```{r checkpca, fig.width = 9, fig.height = 7}
 identical(rownames(mydataPopStruct$PCA), Msa_latlong$Accession)
 Msa_latlong <- cbind(Msa_latlong, mydataPopStruct$PCA)
 
@@ -174,8 +242,12 @@ ggplot() +
             mapping = aes(x = long, y = lat, group = group2),
             color = "black") +
   geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = PC1)) +
-  scale_color_viridis_c() +
+             mapping = aes(x = Longitude, y = Latitude, fill = PC1,
+                           shape = as.character(Ploidy)),
+             size = 3) +
+  scale_fill_viridis_c() +
+  labs(shape = "Ploidy") +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
   ggtitle("PC1")
 
 ggplot() +
@@ -183,8 +255,12 @@ ggplot() +
             mapping = aes(x = long, y = lat, group = group2),
             color = "black") +
   geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = PC2)) +
-  scale_color_viridis_c() +
+             mapping = aes(x = Longitude, y = Latitude, fill = PC2,
+                           shape = as.character(Ploidy)),
+             size = 3) +
+  scale_fill_viridis_c() +
+  labs(shape = "Ploidy") +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
   ggtitle("PC2")
 ```
 
@@ -199,6 +275,7 @@ matrices of marker data from polyRAD and then go from there.
 ```{r getwmg}
 matrixPopStruct <- GetWeightedMeanGenotypes(mydataPopStruct)
 matrixNaive <- GetWeightedMeanGenotypes(mydataNaive)
+matrixIntermediate <- GetWeightedMeanGenotypes(mydataIntermediate)
 ```
 
 ### Discriminant analysis of principal components (DAPC)
@@ -218,13 +295,20 @@ clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive))
 
 ![BIC using naive dataset](images/BIC_naive.png)
 
-Based on these curves, I chose six and four clusters for the population
-structure and naive datasets, respectively.
+```{r findclust1c, eval = FALSE}
+clust3 <- find.clusters(matrixIntermediate, n.pca = nrow(matrixIntermediate))
+```
+
+![BIC using intermediate dataset](images/BIC_intermediate.png)
+
+Based on these curves, I chose six, four, and four clusters for the population
+structure, naive, and intermediate datasets, respectively.
 
 ```{r findclust2, echo = FALSE}
 set.seed(529)
 clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct), n.clust = 6)
 clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive), n.clust = 4)
+clust3 <- find.clusters(matrixIntermediate, n.pca = nrow(matrixIntermediate), n.clust = 4)
 ```
 
 Now we will use these preliminary clusters to run DAPC.  You may choose to
@@ -235,6 +319,8 @@ dapc_PopStruct <- dapc(matrixPopStruct, clust1$grp,
                        n.pca = 200, n.da = 5)
 dapc_Naive <- dapc(matrixNaive, clust2$grp,
                        n.pca = 200, n.da = 3)
+dapc_Intermediate <- dapc(matrixIntermediate, clust3$grp,
+                       n.pca = 200, n.da = 3)
 ```
 
 We'll add the assignments to our sample table.
@@ -242,21 +328,29 @@ We'll add the assignments to our sample table.
 ```{r dapctable}
 Msa_latlong$DAPC_PopStruct <- dapc_PopStruct$assign
 Msa_latlong$DAPC_Naive <- dapc_Naive$assign
+Msa_latlong$DAPC_Intermediate <- dapc_Intermediate$assign
 ```
 
-We can visualize $H_{ind}/H_E$ by DAPC group in order to identify groups that
-are likely to represent interspecies hybrids.
+How did DAPC groups correspond to ploidy?
+
+```{r dapcpld}
+table(Msa_latlong$DAPC_PopStruct, Msa_latlong$Ploidy)
+table(Msa_latlong$DAPC_Naive, Msa_latlong$Ploidy)
+table(Msa_latlong$DAPC_Intermediate, Msa_latlong$Ploidy)
+```
+
+We can visualize $H_{ind}/H_E$ by DAPC group in order to see if that matches
+our expectations based on ploidy. Groups with higher values than expected could
+represent interspecies hybrids.
 
 ```{r dapcbarplots}
 ggplot(Msa_latlong, aes(x = DAPC_PopStruct, y = HindHe, fill = DAPC_PopStruct)) +
   geom_boxplot()
 ggplot(Msa_latlong, aes(x = DAPC_Naive, y = HindHe, fill = DAPC_Naive)) +
   geom_boxplot()
+ggplot(Msa_latlong, aes(x = DAPC_Intermediate, y = HindHe, fill = DAPC_Intermediate)) +
+  geom_boxplot()
 ```
-
-So with the population structure-aware genotypes, groups 4 and 6 are hybrids.
-With the naive genotypes, group 1 is hybrids.  (The groups may be in a different
-order for you.)
 
 We can map these groups to see if they make sense geographically.
 
@@ -266,18 +360,37 @@ ggplot() +
             mapping = aes(x = long, y = lat, group = group2),
             color = "black") +
   geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = DAPC_PopStruct))
+             mapping = aes(x = Longitude, y = Latitude, fill = DAPC_PopStruct,
+                           shape = as.character(Ploidy)),
+             size = 2.5) +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
+  labs(shape = "Ploidy")
 
 ggplot() +
   geom_path(data = east_asia,
             mapping = aes(x = long, y = lat, group = group2),
             color = "black") +
   geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = DAPC_Naive))
+             mapping = aes(x = Longitude, y = Latitude, fill = DAPC_Naive,
+                           shape = as.character(Ploidy)),
+             size = 2.5) +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
+  labs(shape = "Ploidy")
+
+ggplot() +
+  geom_path(data = east_asia,
+            mapping = aes(x = long, y = lat, group = group2),
+            color = "black") +
+  geom_point(data = Msa_latlong,
+             mapping = aes(x = Longitude, y = Latitude, fill = DAPC_Intermediate,
+                           shape = as.character(Ploidy)),
+             size = 2.5) +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
+  labs(shape = "Ploidy")
 ```
 
-The extra clusters that we got from using the population structure-aware
-genotypes don't seem to add meaningful information.
+The intermediate approach seems to make the most sense geographically, so it may
+be best to proceed with that approach.
 
 ### Spatial principal coordinates analysis (sPCA)
 
@@ -286,32 +399,15 @@ find more subtle patterns of geographic population structure.  To perform
 this analysis, we will first need to convert latitude and longitude to UTM.
 We'll choose a UTM zone central to the dataset; see
 https://en.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system.
-We'll also discard samples without collection location information.
 
 ```{r utm}
 tempXY <- data.frame(Accession = Msa_latlong$Accession,
                      X = Msa_latlong$Longitude,
                      Y = Msa_latlong$Latitude)
-tempXY <- tempXY[!is.na(tempXY$X),]
 attr(tempXY, "projection") <- "LL"
 attr(tempXY, "zone") <- 52
 utmXY <- PBSmapping::convUL(tempXY)
 summary(utmXY)
-```
-
-The interspecies hybrids will have a strong genetic signal that isn't related
-to geography, so it is best to remove them from the analysis.  In case my
-DAPC groupings change upon rerunning the analysis, I'll write some code to
-identify the hybrid cluster.
-
-```{r filthybrid}
-hhByDAPC <- tapply(Msa_latlong$HindHe, Msa_latlong$DAPC_Naive, median)
-hhByDAPC
-hybridClust <- names(hhByDAPC)[hhByDAPC > 1]
-hybridInd <- Msa_latlong$Accession[Msa_latlong$DAPC_Naive %in% hybridClust]
-
-utmXY <- utmXY[!utmXY$Accession %in% hybridInd,]
-str(utmXY)
 ```
 
 We will jitter the positions since some accessions were collected at the same
@@ -341,17 +437,21 @@ spca_PopStruct <- spca(matrixPopStruct[utmXY$Accession,], cn = myCN,
                        nfposi = 5, nfnega = 0, scannf = FALSE)
 spca_Naive <- spca(matrixNaive[utmXY$Accession,], cn = myCN,
                    nfposi = 5, nfnega = 0, scannf = FALSE)
+spca_Intermediate <- spca(matrixIntermediate[utmXY$Accession,], cn = myCN,
+                   nfposi = 5, nfnega = 0, scannf = FALSE)
 ```
 
 We'll add the results to our sample table.
 
 ```{r addspca}
-temp <- matrix(NA_real_, nrow = nrow(Msa_latlong), ncol = 10,
+temp <- matrix(NA_real_, nrow = nrow(Msa_latlong), ncol = 15,
                dimnames = list(Msa_latlong$Accession,
                                c(paste0("sPCA_PopStruct_", 1:5),
-                                 paste0("sPCA_Naive_", 1:5))))
+                                 paste0("sPCA_Naive_", 1:5),
+                                 paste0("sPCA_Intermediate_", 1:5))))
 temp[rownames(spca_PopStruct$li),1:5] <- as.matrix(spca_PopStruct$li)
 temp[rownames(spca_Naive$li),6:10] <- as.matrix(spca_Naive$li)
+temp[rownames(spca_Intermediate$li),11:15] <- as.matrix(spca_Intermediate$li)
 Msa_latlong <- cbind(Msa_latlong, temp)
 ```
 
@@ -360,98 +460,24 @@ got with the PCA done for genotype calling.  The fourth and fifth differ by
 genotype calling method, so the first three are probably the most meaningful and
 trustworthy.
 
-```{r plotspca}
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_PopStruct_1)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 1, PopStruct genotype calls")
+```{r plotspca, fig.width = 9, fig.height = 12, warning = FALSE}
+temp <- Msa_latlong[, c(1,2,4,5,grep("sPCA_", colnames(Msa_latlong)))]
+temp <- pivot_longer(temp, cols = -(1:4), names_prefix = "sPCA_",
+                     names_to = c("Approach", "PC"), names_sep = "_",
+                     values_to = "Score")
 
 ggplot() +
   geom_path(data = east_asia,
             mapping = aes(x = long, y = lat, group = group2),
             color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_PopStruct_2)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 2, PopStruct genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_PopStruct_3)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 3, PopStruct genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_PopStruct_4)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 4, PopStruct genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_PopStruct_5)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 5, PopStruct genotype calls")
-```
-
-```{r plotspca2}
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_Naive_1)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 1, Naive genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_Naive_2)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 2, Naive genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_Naive_3)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 3, Naive genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_Naive_4)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 4, Naive genotype calls")
-
-ggplot() +
-  geom_path(data = east_asia,
-            mapping = aes(x = long, y = lat, group = group2),
-            color = "black") +
-  geom_point(data = Msa_latlong,
-             mapping = aes(x = Longitude, y = Latitude, color = sPCA_Naive_5)) +
-  scale_color_viridis_c() +
-  ggtitle("sPCA axis 5, Naive genotype calls")
+  geom_point(data = temp,
+             mapping = aes(x = Longitude, y = Latitude, fill = Score,
+                           shape = as.character(Ploidy))) +
+  scale_fill_viridis_c() +
+  scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
+  labs(shape = "Ploidy") +
+  scale_x_continuous(limits = c(110, 146)) +
+  facet_grid(PC ~ Approach, labeller = "label_both")
 ```
 
 ### Mantel test
@@ -460,11 +486,10 @@ For the rest of the tutorial, I will use only one genotype calling method for th
 sake of brevity.
 
 For a Mantel test, we need to compare genetic and geographic distances.  First
-we will get Euclidian genetic distances for non-hybrid individuals with
-collection location information.
+we will get Euclidian genetic distances.
 
 ```{r distsub}
-distNaive_subset <- dist(matrixNaive[utmXY$Accession,], method = "euclidean")
+distIntermediate <- dist(matrixIntermediate[utmXY$Accession,], method = "euclidean")
 ```
 
 We can use the UTM coordinates directly to get distance in kilometers.
@@ -477,18 +502,18 @@ Now we can test that these are correlated with each other.
 Unsurprisingly at this point, the relationship is significant.
 
 ```{r mantel}
-mantel_Naive <- mantel.randtest(distNaive_subset, dist_geo)
-mantel_Naive
+mantel_Intermediate <- mantel.randtest(distIntermediate, dist_geo)
+mantel_Intermediate
 ```
 
-This relationship can also be visualized.  A positive relationship can
+This relationship can also be visualized.  A positive, bimodal relationship can
 be observed.  It also looks like there are some pairs with particularly low
 genetic distance in close geographic proximity, which may represent siblings,
 parent-offspring, or clones.
 
-```{r plotmantel}
-ggplot(mapping = aes(x = dist_geo, y = distNaive_subset)) +
-  geom_point() + geom_density_2d() + 
+```{r plotmantel, warning = FALSE}
+ggplot(mapping = aes(x = dist_geo, y = distIntermediate)) +
+  geom_point(alpha = 0.1) + geom_density_2d() + 
   labs(x = "Geographic distance", y = "Genetic distance")
 ```
 
@@ -498,30 +523,23 @@ Are there other functions from adegenet that you want to use?  You can export
 discrete genotypes directly from polyRAD to a genind object.
 
 ```{r exportgenind, eval = FALSE}
-mygenind <- Export_adegenet_genind(mydataNaive)
+mygenind <- Export_adegenet_genind(mydataIntermediate)
 ```
 
 ## Analysis of molecular variance (AMOVA) using pegas
 
 In AMOVA, genetic distances between individuals or populations are
 partitioned so that we can determine the amount of variance explained by
-heirarchical groupings.  There are a few implementations in R, and we will
-use the one from the pegas package here.
-
-First we will get a matrix of Euclidean genetic distances between accessions.
-
-```{r dist}
-distNaive <- dist(matrixNaive, method = "euclidean")
-```
-
-Now we will regress that distance on the DAPC clusters.
+hierarchical groupings.  There are a few implementations in R, and we will
+use the one from the pegas package here.  Here the matrix of Euclidean
+distances is regressed on the DAPC clusters.
 
 ```{r amova}
-amovaNaive <- pegas::amova(distNaive ~ DAPC_Naive, data = Msa_latlong)
-amovaNaive
+amovaIntermediate <- pegas::amova(distIntermediate ~ DAPC_Intermediate, data = Msa_latlong)
+amovaIntermediate$varcomp
 ```
 
-We can see that these four DAPC clusters explain 11.5% of the molecular variance.
+We can see that these four DAPC clusters explain 16.3% of the molecular variance.
 Significance is less than 0.001; we would have to do more permutations (`nperm`)
 to determine it exactly.
 
@@ -531,24 +549,24 @@ To calculate population differentiation statistics, we need to know allele frequ
 in each group.  We can calculate these as column means of the posterior mean genotypes.
 
 ```{r popfreq}
-matrixNaiveAll <- GetWeightedMeanGenotypes(mydataNaive, omit1allelePerLocus = FALSE)
-freq_by_pop <- do.call(rbind, by(matrixNaiveAll, Msa_latlong$DAPC_Naive, colMeans))
+matrixIntermediateAll <- GetWeightedMeanGenotypes(mydataIntermediate, omit1allelePerLocus = FALSE)
+freq_by_pop <- do.call(rbind, by(matrixIntermediateAll, Msa_latlong$DAPC_Intermediate, colMeans))
 freq_by_pop[,1:5]
 ```
 
 We need to make sure that allele frequencies sum to one within loci, which is not
 guaranteed by polyRAD when there are more than two alleles.  We also need to rename
-alleles to a format supported by polyRAD.
+alleles to a format supported by polysat.
 
 ```{r freqnorm}
-for(i in seq_len(nLoci(mydataNaive))){
-  thesealleles <- which(mydataNaive$alleles2loc == i)
+for(i in seq_len(nLoci(mydataIntermediate))){
+  thesealleles <- which(mydataIntermediate$alleles2loc == i)
   # normalize to sum to one
   temp <- freq_by_pop[,thesealleles]
   temp <- sweep(temp, 1, rowSums(temp), "/")
   freq_by_pop[,thesealleles] <- temp
   # change allele names
-  thisloc <- GetLoci(mydataNaive)[i]
+  thisloc <- GetLoci(mydataIntermediate)[i]
   thisloc <- gsub("\\.", "_", thisloc) # remove periods from locus names
   colnames(freq_by_pop)[thesealleles] <- paste(thisloc, seq_along(thesealleles), sep = ".")
 }
@@ -558,8 +576,7 @@ For the polysat `calcPopDiff` function, we also need a column called "Genomes"
 indicating the size of the population multiplied by the ploidy.
 
 ```{r freqgenomes}
-ploidy <- 4L
-genomes <- as.vector(table(Msa_latlong$DAPC_Naive)) * ploidy
+genomes <- tapply(Msa_latlong$Ploidy, Msa_latlong$DAPC_Intermediate, sum)
 freq_df <- data.frame(Genomes = genomes,
                       freq_by_pop)
 ```
@@ -579,9 +596,9 @@ from the population, they will be different), a common measure of diversity.
 Here I'm just doing the calculation manually rather than using polysat.
 
 ```{r diversity}
-div_mat <- matrix(nrow = nrow(freq_by_pop), ncol = nLoci(mydataNaive),
-                  dimnames = list(rownames(freq_by_pop), GetLoci(mydataNaive)))
-for(i in seq_len(nLoci(mydataNaive))){
+div_mat <- matrix(nrow = nrow(freq_by_pop), ncol = nLoci(mydataIntermediate),
+                  dimnames = list(rownames(freq_by_pop), GetLoci(mydataIntermediate)))
+for(i in seq_len(nLoci(mydataIntermediate))){
   thesealleles <- which(mydataNaive$alleles2loc == i)
 
   temp <- freq_by_pop[,thesealleles]
@@ -603,12 +620,12 @@ but faster methods.  (Instructions on running Structure from the command line
 are beyond the scope of this tutorial.)
 
 ```{r structure, eval = FALSE}
-Export_Structure(mydataNaive, "Msa_4x_structure.txt")
+Export_Structure(mydataIntermediate, "Msa_structure.txt")
 ```
 
 ```
-Number of individuals: 270
-Number of loci: 1929
+Number of individuals: 595
+Number of loci: 578
 Ploidy of data: 4
 Missing data value: -9
 
