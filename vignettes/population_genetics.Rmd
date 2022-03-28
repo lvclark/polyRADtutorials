@@ -84,7 +84,12 @@ know there are only 5000 SNPs in this example dataset. Many of these SNPs
 originated from the same RAD tags, so you'll see that they get reduced to
 1395 markers, many of which are multiallelic.
 
-```{r vcf}
+```{r echo = FALSE}
+# Determine if VariantAnnotation is installed.
+haveVA <- requireNamespace("VariantAnnotation", quietly = TRUE)
+```
+
+```{r vcf, eval = haveVA}
 # Find the VCF file to import
 infile <- system.file("extdata", "Msa_Chr03_5k.vcf.bgz",
                       package = "polyRADtutorials")
@@ -96,6 +101,13 @@ names(tp) <- Msa_latlong$Accession
 # Read the VCF
 mydata <- VCF2RADdata(infile, possiblePloidies = list(2), taxaPloidy = tp,
                       expectedAlleles = 15000, expectedLoci = 5000)
+```
+
+```{r backupvcf, eval = !haveVA, echo = FALSE}
+mydata <- readRDS("VCFdata.rds")
+```
+
+```{r printmydata}
 mydata
 ```
 
