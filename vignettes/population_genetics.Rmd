@@ -40,6 +40,7 @@ library(pegas)
 library(PBSmapping)
 library(spdep)
 library(polysat)
+library(tidyr)
 ```
 
 First we will load a spreadsheet of collection location information and ploidy
@@ -298,6 +299,8 @@ clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive))
 clust3 <- find.clusters(matrixIntermediate, n.pca = nrow(matrixIntermediate))
 ```
 
+![BIC using intermediate dataset](images/BIC_intermediate.png)
+
 Based on these curves, I chose six, four, and four clusters for the population
 structure, naive, and intermediate datasets, respectively.
 
@@ -553,7 +556,7 @@ freq_by_pop[,1:5]
 
 We need to make sure that allele frequencies sum to one within loci, which is not
 guaranteed by polyRAD when there are more than two alleles.  We also need to rename
-alleles to a format supported by polyRAD.
+alleles to a format supported by polysat.
 
 ```{r freqnorm}
 for(i in seq_len(nLoci(mydataIntermediate))){
