@@ -185,7 +185,7 @@ hist(hh4x_05, breaks = 20, xlab = "Hind/He", main = "Hind/He in tetraploids, MAF
 
 We are expecting 0.5 in diploids and 0.75 in tetraploids, so the modes of 0.35 for diploids
 and 0.45 for tetraploids probably represent Mendelian markers. Using the chart from the
-main tutorial, with overdispersion of 11 this means inbreeding of about 0.3 for both
+main tutorial, with overdispersion of 12 this means inbreeding of about 0.3 for both
 diploids and tetraploids.
 
 Now we can use our estimated overdispersion and inbreeding to determine the expected
@@ -200,7 +200,7 @@ hist(hhByLoc)
 set.seed(528)
 ExpectedHindHe(mydata, inbreeding = 0.3, overdispersion = od$optimal)
 
-thresh1 <- 0.314
+thresh1 <- 0.321
 thresh2 <- 0.507
 
 keeploci <- names(hhByLoc)[hhByLoc > thresh1 & hhByLoc < thresh2]
@@ -242,7 +242,7 @@ mydataIntermediate <- IteratePopStruct(mydata, overdispersion = od$optimal,
 We can take a look at the PCs that were used for genotype calling by the
 population structure method.  This will give us an idea of patterns of
 population structure that could be exaggerated using that calling method.
-The first two axes are shown below, but I recommend exploring all nine
+The first two axes are shown below, but I recommend exploring all eight
 (or however many are generated with your dataset).
 
 ```{r checkpca, fig.width = 9, fig.height = 7}
@@ -313,12 +313,12 @@ clust3 <- find.clusters(matrixIntermediate, n.pca = nrow(matrixIntermediate))
 
 ![BIC using intermediate dataset](images/BIC_intermediate.png)
 
-Based on these curves, I chose six, four, and four clusters for the population
+Based on these curves, I chose seven, four, and four clusters for the population
 structure, naive, and intermediate datasets, respectively.
 
 ```{r findclust2, echo = FALSE}
 set.seed(529)
-clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct), n.clust = 6)
+clust1 <- find.clusters(matrixPopStruct, n.pca = nrow(matrixPopStruct), n.clust = 7)
 clust2 <- find.clusters(matrixNaive, n.pca = nrow(matrixNaive), n.clust = 4)
 clust3 <- find.clusters(matrixIntermediate, n.pca = nrow(matrixIntermediate), n.clust = 4)
 ```
@@ -328,7 +328,7 @@ omit the `n.pca` and `n.da` arguments in order to choose these values interactiv
 
 ```{r dapc}
 dapc_PopStruct <- dapc(matrixPopStruct, clust1$grp,
-                       n.pca = 200, n.da = 5)
+                       n.pca = 200, n.da = 6)
 dapc_Naive <- dapc(matrixNaive, clust2$grp,
                        n.pca = 200, n.da = 3)
 dapc_Intermediate <- dapc(matrixIntermediate, clust3$grp,
@@ -547,11 +547,12 @@ use the one from the pegas package here.  Here the matrix of Euclidean
 distances is regressed on the DAPC clusters.
 
 ```{r amova}
+set.seed(1002)
 amovaIntermediate <- pegas::amova(distIntermediate ~ DAPC_Intermediate, data = Msa_latlong)
-amovaIntermediate$varcomp
+amovaIntermediate
 ```
 
-We can see that these four DAPC clusters explain 16.3% of the molecular variance.
+We can see that these four DAPC clusters explain 16.1% of the molecular variance.
 Significance is less than 0.001; we would have to do more permutations (`nperm`)
 to determine it exactly.
 
@@ -637,7 +638,7 @@ Export_Structure(mydataIntermediate, "Msa_structure.txt")
 
 ```
 Number of individuals: 595
-Number of loci: 578
+Number of loci: 553
 Ploidy of data: 4
 Missing data value: -9
 
