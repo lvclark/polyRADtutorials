@@ -11,7 +11,7 @@ Author: Lindsay V. Clark [aut, cre] (<https://orcid.org/0000-0002-3881-9252>),
 Maintainer: Lindsay V. Clark <Lindsay.Clark@seattlechildrens.org>
 Depends: R (>= 3.5.0)
 Suggests: polyRAD, adegenet, knitr, rmarkdown, ggplot2, maps, pegas, PBSmapping,
-  spdep, polysat, adespatial
+  spdep, polysat, adespatial, umap
 VignetteBuilder: knitr, rmarkdown
 Description: Additional tutorials for polyRAD that are not included in its
   package vignettes due to file size, computational time, and/or package

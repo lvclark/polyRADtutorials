@@ -41,6 +41,7 @@ library(PBSmapping)
 library(spdep)
 library(polysat)
 library(tidyr)
+library(umap)
 ```
 
 First we will load a spreadsheet of collection location information and ploidy
@@ -275,7 +276,6 @@ ggplot() +
   scale_shape_manual(values = c("2" = 21, "3" = 24, "4" = 22)) +
   ggtitle("PC2")
 ```
-
 
 ## Analyses with adegenet
 
@@ -537,6 +537,46 @@ discrete genotypes directly from polyRAD to a genind object.
 ```{r exportgenind, eval = FALSE}
 mygenind <- Export_adegenet_genind(mydataIntermediate)
 ```
+
+## Visualization with UMAP
+
+If we visualize our first two PCA axes, some geographical regions and DAPC
+clusters are stretched out and not well-represented on them, and we know
+there's more to the story since there was a third axis that seemed important
+and reproducible.
+
+```{r pca2d}
+ggplot(Msa_latlong, aes(x = PC1, y = PC2, color = Country, shape = as.factor(Ploidy))) +
+  geom_point()
+
+ggplot(Msa_latlong, aes(x = PC1, y = PC2, color = DAPC_Intermediate, shape = as.factor(Ploidy))) +
+  geom_point()
+```
+
+An alternative is a non-linear reduction called UMAP, which places similar
+individuals next to each other, with further distances only being rough
+approximations of genetic distance.
+
+```{r umap}
+set.seed(1002)
+myumap <- umap(matrixIntermediate, method = "naive")
+
+identical(Msa_latlong$Accession, rownames(myumap$layout))
+
+Msa_latlong$UMAP_1 <- myumap$layout[,1]
+Msa_latlong$UMAP_2 <- myumap$layout[,2]
+
+ggplot(Msa_latlong, aes(x = UMAP_1, y = UMAP_2, color = Country, shape = as.factor(Ploidy))) +
+  geom_point()
+
+ggplot(Msa_latlong, aes(x = UMAP_1, y = UMAP_2, color = DAPC_Intermediate, shape = as.factor(Ploidy))) +
+  geom_point()
+```
+
+We can see the separation of northern and southern Japan much more clearly now.
+The Yangtze River cluster still looks like an offshoot of other populations from
+China, but no longer takes up a disproportionate amount of space on the plot for
+the number of individuals it has.
 
 ## Analysis of molecular variance (AMOVA) using pegas
 
